@@ -1,9 +1,9 @@
 """
-CXL Switch model with proper queue-driven transmission.
+CXL Switch model with Virtual Channels and Credit-Based Flow Control (CBFC).
 """
 
 from collections import deque, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
 from .packet import CXLPacket, SimulationEvent, CXL_SWITCH_LATENCY, Priority
@@ -11,63 +11,86 @@ from .packet import CXLPacket, SimulationEvent, CXL_SWITCH_LATENCY, Priority
 
 @dataclass
 class SwitchPort:
-    """Single port on a CXL switch"""
+    """Single port on a CXL switch representing link-local tx/rx queues."""
     port_id: int
-    max_queue_depth: int = 32
+    max_queue_depth: int = 16  # Credits per VC
     bandwidth_gbps: float = 64.0
-
+    
     def __post_init__(self):
-        self.queues = {
-            Priority.CRITICAL: deque(),
-            Priority.HIGH: deque(),
-            Priority.MEDIUM: deque(),
-            Priority.LOW: deque()
-        }
+        # 8 Virtual Channels: 0-3 for Requests, 4-7 for Responses
+        self.num_vcs = 8
+        
+        # Ingress buffers (Rx side)
+        self.ingress_queues: Dict[int, deque] = {vc: deque() for vc in range(self.num_vcs)}
+        
+        # Egress buffers (Tx side)
+        self.egress_queues: Dict[int, deque] = {vc: deque() for vc in range(self.num_vcs)}
+        
+        # Tx Credits (how many flits/packets we can send to the downstream neighbor)
+        # Initialized to the max_queue_depth for each VC
+        self.tx_credits: Dict[int, int] = {vc: self.max_queue_depth for vc in range(self.num_vcs)}
+        
+        # Stats
         self.packets_processed = 0
-        self.packets_dropped_by_priority = {p: 0 for p in Priority}
+        self.packets_dropped = 0  # Should be 0 with CBFC
         self.total_queue_time = 0.0
-        self.is_transmitting = False  # Is port currently busy?
+        
+        # Tx State
+        self.is_transmitting = False
         self.next_available_time = 0.0
-
-    def enqueue(self, packet: CXLPacket) -> bool:
-        """Enqueue packet based on priority. Returns True if successful."""
-        if self.is_full:
-            self.packets_dropped_by_priority[packet.priority] += 1
+        
+    def enqueue_ingress(self, packet: CXLPacket) -> bool:
+        """Receive packet from upstream link into ingress queue."""
+        vc = packet.vc_id
+        if len(self.ingress_queues[vc]) >= self.max_queue_depth:
+            # Under CBFC, this should NEVER happen unless credits are mismanaged
+            self.packets_dropped += 1
             return False
-
-        self.queues[packet.priority].append(packet)
+            
+        self.ingress_queues[vc].append(packet)
         return True
 
-    def dequeue(self, current_time: float) -> Optional[CXLPacket]:
-        """Remove and return head packet from highest priority queue."""
-        for priority in [Priority.CRITICAL, Priority.HIGH, Priority.MEDIUM, Priority.LOW]:
-            if self.queues[priority]:
+    def enqueue_egress(self, packet: CXLPacket):
+        """Move packet from crossbar into egress queue."""
+        self.egress_queues[packet.vc_id].append(packet)
+
+    def dequeue_egress(self, current_time: float) -> Optional[CXLPacket]:
+        """
+        Remove and return head packet from highest priority egress queue
+        THAT ALSO HAS TX CREDITS AVAILABLE.
+        """
+        # Strict priority scheduling across VCs 7 -> 0
+        # Responses (4-7) generally take priority over Requests (0-3) to clear dependencies
+        for vc in range(self.num_vcs - 1, -1, -1):
+            if self.egress_queues[vc] and self.tx_credits[vc] > 0:
                 self.packets_processed += 1
-                packet = self.queues[priority].popleft()
+                packet = self.egress_queues[vc].popleft()
+                self.tx_credits[vc] -= 1  # Consume a credit
                 self.total_queue_time += (current_time - packet.timestamp)
                 return packet
         return None
 
     @property
-    def occupancy(self) -> int:
-        """Current number of packets across all priority queues."""
-        return sum(len(q) for q in self.queues.values())
+    def egress_occupancy(self) -> int:
+        return sum(len(q) for q in self.egress_queues.values())
+        
+    @property
+    def ingress_occupancy(self) -> int:
+        return sum(len(q) for q in self.ingress_queues.values())
 
     @property
-    def is_full(self) -> bool:
-        """Check if total occupancy reached limit."""
-        return self.occupancy >= self.max_queue_depth
-
-    @property
-    def has_packets(self) -> bool:
-        """Check if any packets are queued."""
-        return self.occupancy > 0
+    def has_transmittable_packets(self) -> bool:
+        """Check if we have packets AND credits to send them."""
+        for vc in range(self.num_vcs - 1, -1, -1):
+            if self.egress_queues[vc] and self.tx_credits[vc] > 0:
+                return True
+        return False
 
 
 class CXLSwitch:
-    """Models a CXL fabric switch with proper queueing."""
+    """Models a CXL fabric switch with CBFC."""
 
-    def __init__(self, switch_id: int, num_ports: int, queue_depth: int = 32, ecn_threshold: float = 0.6, routing_strategy=None):
+    def __init__(self, switch_id: int, num_ports: int, queue_depth: int = 16, ecn_threshold: float = 0.6, routing_strategy=None):
         self.switch_id = switch_id
         self.num_ports = num_ports
         self.ports = [SwitchPort(i, queue_depth) for i in range(num_ports)]
@@ -85,14 +108,10 @@ class CXLSwitch:
 
     def route_packet(self, packet: CXLPacket, arrival_port: int, sim_engine) -> bool:
         """
-        Route incoming packet to output port.
-        Only schedules transmission if queue was empty.
+        Route packet from Ingress queue to Egress queue (simulating Crossbar).
         """
         self.total_packets_processed += 1
 
-        # Determine logical destination (device or host)
-        # For forward path, dst_device is an int. For response, we'll use a string or tuple
-        # But wait, let's just use a property `target` which we can set on the packet
         target = getattr(packet, 'target', packet.dst_device)
         
         if target not in self.routing_table or not self.routing_table[target]:
@@ -104,24 +123,21 @@ class CXLSwitch:
         if self.routing_strategy:
             output_port_id = self.routing_strategy.get_output_port(self, packet, available_ports)
         else:
-            output_port_id = available_ports[0] # Static default
+            output_port_id = available_ports[0]
             
-        port = self.ports[output_port_id]
+        out_port = self.ports[output_port_id]
 
-        # Check if queue was empty before enqueue
-        was_empty = not port.has_packets
+        # Was egress queue empty or lacking transmittable packets?
+        could_transmit_before = out_port.has_transmittable_packets
 
-        # Try to enqueue
-        if not port.enqueue(packet):
-            self.total_packets_dropped += 1
-            return False
-
-        # ECN marking
-        if (port.occupancy / port.max_queue_depth) > self.ecn_threshold:
+        # ECN marking (based on egress occupancy)
+        if (out_port.egress_occupancy / (out_port.max_queue_depth * out_port.num_vcs)) > self.ecn_threshold:
             packet.ecn_marked = True
 
-        # Only schedule transmission if this is the first packet in queue
-        if was_empty and not port.is_transmitting:
+        out_port.enqueue_egress(packet)
+
+        # If it wasn't transmittable before, but is now (due to credits), schedule tx
+        if not could_transmit_before and out_port.has_transmittable_packets and not out_port.is_transmitting:
             self._schedule_port_transmission(output_port_id, sim_engine)
 
         return True
@@ -130,26 +146,23 @@ class CXLSwitch:
         """Schedule transmission of head packet from port queue."""
         port = self.ports[output_port_id]
 
-        if not port.has_packets:
+        if not port.has_transmittable_packets:
             port.is_transmitting = False
             return
 
         port.is_transmitting = True
 
-        # Switch processing delay + serialization
         current_time = sim_engine.current_time
 
-        # Ensure we don't schedule in the past
         if port.next_available_time > current_time:
             tx_start = port.next_available_time
         else:
             tx_start = current_time + CXL_SWITCH_LATENCY
 
-        # Schedule the transmission event
         event = SimulationEvent(
             timestamp=tx_start,
             event_type="switch_transmit",
-            packet=None,  # Will dequeue in handler
+            packet=None,
             switch_id=self.switch_id,
             metadata={"output_port": output_port_id}
         )
@@ -157,23 +170,19 @@ class CXLSwitch:
 
     def transmit_packet(self, output_port: int, sim_engine) -> Optional[CXLPacket]:
         """
-        Transmit head packet from queue.
-        Then schedule next packet if queue not empty.
+        Transmit packet from egress queue (consumes tx_credit).
+        Then schedule next packet if transmittable.
         """
         port = self.ports[output_port]
-        packet = port.dequeue(sim_engine.current_time)
+        packet = port.dequeue_egress(sim_engine.current_time)
 
         if packet:
             packet.route.append(self.switch_id)
 
-            # Calculate serialization delay for this packet
             serialization_ns = (packet.size * 8) / (port.bandwidth_gbps * 1e9) * 1e9
-
-            # Update when port will be free
             port.next_available_time = sim_engine.current_time + serialization_ns
 
-            # If more packets in queue, schedule next transmission
-            if port.has_packets:
+            if port.has_transmittable_packets:
                 self._schedule_port_transmission(output_port, sim_engine)
             else:
                 port.is_transmitting = False
@@ -181,22 +190,35 @@ class CXLSwitch:
             port.is_transmitting = False
 
         return packet
+        
+    def receive_credit(self, output_port: int, vc_id: int, sim_engine):
+        """Receive credit return from downstream neighbor."""
+        port = self.ports[output_port]
+        could_transmit_before = port.has_transmittable_packets
+        
+        port.tx_credits[vc_id] += 1
+        
+        # If we couldn't transmit before, but now we have a credit, we should check!
+        if not could_transmit_before and port.has_transmittable_packets and not port.is_transmitting:
+            # We can start transmitting again!
+            # The port is idle right now, we can schedule it starting from current time
+            self._schedule_port_transmission(output_port, sim_engine)
 
     def get_congestion_metrics(self) -> dict:
+        total_drops = sum(p.packets_dropped for p in self.ports)
         return {
             "switch_id": self.switch_id,
             "total_processed": self.total_packets_processed,
-            "total_dropped": self.total_packets_dropped,
-            "drop_rate": self.total_packets_dropped / max(1, self.total_packets_processed),
-            "port_occupancies": [p.occupancy / p.max_queue_depth for p in self.ports],
-            "avg_occupancy": sum(p.occupancy / p.max_queue_depth for p in self.ports) / len(self.ports),
+            "total_dropped": self.total_packets_dropped + total_drops,
+            "drop_rate": (self.total_packets_dropped + total_drops) / max(1, self.total_packets_processed),
+            "port_occupancies": [p.egress_occupancy / (p.max_queue_depth * p.num_vcs) for p in self.ports],
+            "avg_occupancy": sum(p.egress_occupancy / (p.max_queue_depth * p.num_vcs) for p in self.ports) / len(self.ports),
         }
 
     def print_status(self):
         print(f"\nSwitch {self.switch_id}:")
         print(f"  Processed: {self.total_packets_processed}, Dropped: {self.total_packets_dropped}")
         for port in self.ports:
-            drops_str = ", ".join(f"{p.name}: {v}" for p, v in port.packets_dropped_by_priority.items() if v > 0)
-            drops_msg = f" (Drops: {drops_str})" if drops_str else ""
-            print(f"  Port {port.port_id}: {port.occupancy}/{port.max_queue_depth} queued, "
-                  f"{port.packets_processed} processed{drops_msg}")
+            print(f"  Port {port.port_id}: Egress={port.egress_occupancy}, Ingress={port.ingress_occupancy}, "
+                  f"Processed={port.packets_processed}, Dropped={port.packets_dropped}, "
+                  f"Tx_Credits=[{','.join(str(c) for c in port.tx_credits.values())}]")

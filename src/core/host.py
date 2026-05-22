@@ -9,6 +9,8 @@ from typing import List
 import random
 
 from .packet import CXLPacket, CXLTransactionType, SimulationEvent, Priority
+from collections import deque
+from typing import Dict, Optional
 
 
 class Host:
@@ -26,6 +28,14 @@ class Host:
         self.packets_received = 0
         self.outstanding_requests = {}  # packet_id -> packet
         self.rate_controller = AdaptiveRateController()
+        
+        # Credit-Based Flow Control state
+        self.num_vcs = 8
+        self.egress_queues: Dict[int, deque] = {vc: deque() for vc in range(self.num_vcs)}
+        # Host tracks tx_credits for the switch it is connected to (assume depth 16 per VC)
+        self.tx_credits: Dict[int, int] = {vc: 16 for vc in range(self.num_vcs)}
+        self.is_transmitting = False
+        self.next_available_time = 0.0
         
     def generate_memory_request(
         self,
@@ -58,10 +68,30 @@ class Host:
         )
         
         self.next_packet_id += 1
-        self.packets_sent += 1
         self.outstanding_requests[packet.packet_id] = packet
-        
+        self.egress_queues[packet.vc_id].append(packet)
         return packet
+        
+    def has_transmittable_packets(self) -> bool:
+        """Check if we have packets AND credits to send them."""
+        for vc in range(self.num_vcs - 1, -1, -1):
+            if self.egress_queues[vc] and self.tx_credits[vc] > 0:
+                return True
+        return False
+        
+    def transmit_request(self) -> Optional[CXLPacket]:
+        """Dequeue a packet to send if credits are available."""
+        for vc in range(self.num_vcs - 1, -1, -1):
+            if self.egress_queues[vc] and self.tx_credits[vc] > 0:
+                packet = self.egress_queues[vc].popleft()
+                self.tx_credits[vc] -= 1
+                self.packets_sent += 1
+                return packet
+        return None
+        
+    def receive_credit(self, vc_id: int):
+        """Receive credit return from connected switch."""
+        self.tx_credits[vc_id] += 1
     
     def receive_response(self, packet: CXLPacket):
         """Process received response packet"""

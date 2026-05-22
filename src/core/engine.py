@@ -34,7 +34,7 @@ class SimulationEngine:
         if event.timestamp < self.current_time:
             raise ValueError(f"Cannot schedule event in the past: {event.timestamp} < {self.current_time}")
             
-        if event.event_type == "host_send":
+        if event.event_type == "host_generate":
             self.stats.packets_sent += 1
             
         heapq.heappush(self.event_queue, event)

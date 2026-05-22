@@ -59,8 +59,8 @@ class WeightedRouting(RoutingStrategy):
         
         for port_idx in available_ports:
             port = switch.ports[port_idx]
-            if port.occupancy < min_occupancy:
-                min_occupancy = port.occupancy
+            if port.egress_occupancy < min_occupancy:
+                min_occupancy = port.egress_occupancy
                 best_port = port_idx
                 
         return best_port

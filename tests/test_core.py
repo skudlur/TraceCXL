@@ -112,8 +112,18 @@ class TestSwitch:
             switch.routing_table[0] = [1]  # Route to port 1
             switch.route_packet(packet, arrival_port=0, sim_engine=engine)
         
-        # Third packet should be dropped
-        assert switch.total_packets_dropped >= 1
+        # With CBFC, packets are not dropped. They are queued in egress, 
+        # but only 2 packets can be transmitted due to tx_credits=2.
+        assert switch.total_packets_dropped == 0
+        
+        # Manually dequeue to simulate transmission
+        p1 = switch.ports[1].dequeue_egress(0.0)
+        p2 = switch.ports[1].dequeue_egress(0.0)
+        p3 = switch.ports[1].dequeue_egress(0.0)
+        
+        assert p1 is not None
+        assert p2 is not None
+        assert p3 is None  # Third packet cannot be transmitted, no credits!
 
 
 class TestHost:
@@ -137,7 +147,8 @@ class TestHost:
         assert packet.src_host == 0
         assert packet.dst_device == 1
         assert packet.tx_type == CXLTransactionType.MEM_READ
-        assert host.packets_sent == 1
+        assert host.packets_sent == 0 # Sent is 0 until transmitted
+        assert len(host.egress_queues[packet.vc_id]) == 1
         assert host.num_outstanding == 1
 
 

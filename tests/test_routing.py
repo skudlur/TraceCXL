@@ -25,8 +25,8 @@ def test_weighted_routing():
     packet = CXLPacket(1, CXLTransactionType.MEM_READ, src_host=0, dst_device=0, address=0x1000)
     
     # Enqueue packets on port 0 to make it congested
-    switch.ports[0].queues[packet.priority].append(packet)
-    switch.ports[0].queues[packet.priority].append(packet)
+    switch.ports[0].enqueue_egress(packet)
+    switch.ports[0].enqueue_egress(packet)
     
     # Port 1 is empty, so it should be chosen
     port = strategy.get_output_port(switch, packet, [0, 1])

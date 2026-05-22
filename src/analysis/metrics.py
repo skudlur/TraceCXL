@@ -18,7 +18,7 @@ class MetricsCollector:
         for switch in self.topology.switches:
             for port in switch.ports:
                 # Store (timestamp, occupancy_fraction)
-                frac = port.occupancy / max(1, port.max_queue_depth)
+                frac = port.egress_occupancy / max(1, port.max_queue_depth * port.num_vcs)
                 self.queue_occupancy_history[switch.switch_id][port.port_id].append((current_time, frac))
 
     def record_packet_latency(self, latency: float):

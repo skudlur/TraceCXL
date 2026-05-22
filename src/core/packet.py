@@ -57,6 +57,16 @@ class CXLPacket:
     is_response: bool = False
     
     @property
+    def vc_id(self) -> int:
+        """
+        Virtual Channel ID based on direction and QoS Priority.
+        Requests: VC 0-3 (LOW to CRITICAL)
+        Responses: VC 4-7 (LOW to CRITICAL)
+        """
+        base = 4 if self.is_response else 0
+        return base + self.priority.value
+
+    @property
     def target(self):
         """Logical routing target for this packet"""
         if self.is_response:
