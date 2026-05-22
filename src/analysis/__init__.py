@@ -1,4 +1,4 @@
-"""Analysis and visualization module for CXL fabric simulator."""
+"""Analysis and visualization module for TraceCXL."""
 
 from .metrics import MetricsCollector
 from .plots import plot_latency_cdf, plot_queue_occupancy_heatmap, plot_drop_rate_by_switch

@@ -1,6 +1,6 @@
 # Routing Strategies
 
-The CXL Fabric Simulator implements a modular routing infrastructure based on the Strategy Pattern. This allows different switches (or the entire fabric) to utilize different algorithms for determining the best output port for a given packet.
+The TraceCXL implements a modular routing infrastructure based on the Strategy Pattern. This allows different switches (or the entire fabric) to utilize different algorithms for determining the best output port for a given packet.
 
 All routing strategies are located in `src/routing/strategy.py` and must inherit from the `RoutingStrategy` base class.
 

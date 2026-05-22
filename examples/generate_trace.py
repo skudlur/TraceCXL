@@ -45,7 +45,7 @@ def run_generate_and_replay():
     print(f"    Exported {num_exported} memory requests to CSV.")
     
     # 4. Set up Simulator topology
-    print("\n[2] Setting up CXL Fabric Simulator...")
+    print("\n[2] Setting up TraceCXL...")
     topo_params = {
         "num_spines": 2,
         "num_leaves": 2,

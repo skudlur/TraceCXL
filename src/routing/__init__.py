@@ -1,4 +1,4 @@
-"""Routing strategies for CXL fabric simulator."""
+"""Routing strategies for TraceCXL."""
 
 from .strategy import RoutingStrategy, StaticRouting, ECMPRouting, WeightedRouting
 

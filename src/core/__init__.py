@@ -1,4 +1,4 @@
-"""Core simulation components for CXL fabric simulator."""
+"""Core simulation components for TraceCXL."""
 
 from .packet import (
     CXLPacket, CXLTransactionType, SimulationEvent, Priority,

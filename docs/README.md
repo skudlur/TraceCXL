@@ -1,6 +1,6 @@
-# CXL Fabric Simulator Documentation
+# TraceCXL Documentation
 
-Welcome to the CXL Fabric Simulator documentation. This simulator is a lightweight, discrete-event packet-level network model tailored for evaluating memory fabrics, topologies, and congestion control algorithms.
+Welcome to the TraceCXL documentation. This simulator is a lightweight, discrete-event packet-level network model tailored for evaluating memory fabrics, topologies, and congestion control algorithms.
 
 ## Developer & User Guides
 

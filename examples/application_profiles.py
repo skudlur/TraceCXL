@@ -1,7 +1,7 @@
 """
 Realistic Application Profiles Demo
 
-This script demonstrates the CXL Fabric Simulator running simulated workloads 
+This script demonstrates the TraceCXL running simulated workloads 
 that model real-world application access patterns:
 1. LLM Inference: Memory-bandwidth bound, sequentially scanning huge memory regions (weights/KV-cache).
 2. Key-Value Store: High skew (Zipfian), causing hotspot congestion similar to Memcached.

@@ -1,4 +1,4 @@
-"""Metrics collection for the CXL fabric simulator."""
+"""Metrics collection for the TraceCXL."""
 
 from typing import Dict, List, Any
 from collections import defaultdict
