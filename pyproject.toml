@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cxl-fabric-sim"
-version = "0.1.0"
+name = "TraceCXL"
+version = "1.0.0"
 description = "A high-fidelity discrete-event simulator for studying congestion, QoS, and routing in CXL memory fabric architectures."
 readme = "README.md"
 license = {text = "MIT"}
