@@ -10,6 +10,7 @@ from .patterns import (
     HotspotWorkload,
     BurstyWorkload,
     SequentialWorkload,
+    TraceReplayWorkload,
     create_workload,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     'HotspotWorkload',
     'BurstyWorkload',
     'SequentialWorkload',
+    'TraceReplayWorkload',
     'create_workload',
 ]

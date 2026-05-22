@@ -9,6 +9,7 @@ Implements common memory access patterns:
 """
 
 import random
+import csv
 from typing import List, Tuple
 from dataclasses import dataclass
 
@@ -303,6 +304,65 @@ class SequentialWorkload(WorkloadPattern):
         return requests
 
 
+class TraceReplayWorkload(WorkloadPattern):
+    """
+    Trace replay pattern.
+    
+    Reads memory access requests from a CSV trace file.
+    CSV format: timestamp_ns, host_id, device_id, address, is_read
+    
+    Args:
+        trace_file: Path to the trace CSV file.
+    """
+    
+    def __init__(self, trace_file: str, seed=None):
+        super().__init__(seed)
+        self.trace_file = trace_file
+        
+    def generate_requests(
+        self, num_hosts, num_devices, duration_ns, requests_per_host
+    ) -> List[MemoryRequest]:
+        requests = []
+        
+        with open(self.trace_file, mode='r') as f:
+            reader = csv.reader(f)
+            # Skip header if present
+            header = next(reader, None)
+            if header and header[0].strip().lower() != 'timestamp_ns':
+                # No header, process it
+                f.seek(0)
+                reader = csv.reader(f)
+                
+            for row in reader:
+                if not row or not row[0].strip():
+                    continue
+                
+                timestamp = float(row[0].strip())
+                if timestamp > duration_ns:
+                    break
+                    
+                host_id = int(row[1].strip())
+                device_id = int(row[2].strip())
+                address = int(row[3].strip(), 16) if 'x' in row[3] else int(row[3].strip())
+                
+                is_read_str = row[4].strip().lower()
+                is_read = is_read_str in ('1', 'true', 'read', 'r')
+                
+                # Check bounds
+                if host_id >= num_hosts or device_id >= num_devices:
+                    continue
+                    
+                requests.append(MemoryRequest(
+                    timestamp=timestamp,
+                    host_id=host_id,
+                    device_id=device_id,
+                    address=address,
+                    is_read=is_read
+                ))
+                
+        return requests
+
+
 # Helper function to create workload by name
 def create_workload(workload_type: str, **kwargs) -> WorkloadPattern:
     """
@@ -321,6 +381,7 @@ def create_workload(workload_type: str, **kwargs) -> WorkloadPattern:
         "hotspot": HotspotWorkload,
         "bursty": BurstyWorkload,
         "sequential": SequentialWorkload,
+        "trace": TraceReplayWorkload,
     }
     
     if workload_type not in workloads:
