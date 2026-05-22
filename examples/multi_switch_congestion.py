@@ -34,7 +34,7 @@ if __name__ == "__main__":
     workload = create_workload("bursty", burst_size=20, burst_interval_ns=500.0)
     
     # Run workload
-    stats = sim.run_workload(workload, duration_ns=15_000, requests_per_host=150)
+    stats = sim.run_workload(workload, duration_ns=15_000, requests_per_host=1500000)
     
     # Print results
     stats.print_summary()

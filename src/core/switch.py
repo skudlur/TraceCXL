@@ -6,7 +6,7 @@ from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
-from .packet import CXLPacket, SimulationEvent, CXL_SWITCH_LATENCY, Priority
+from .packet import CXLPacket, CXLFlit, SimulationEvent, CXL_SWITCH_LATENCY, Priority
 
 
 @dataclass
@@ -39,35 +39,34 @@ class SwitchPort:
         self.is_transmitting = False
         self.next_available_time = 0.0
         
-    def enqueue_ingress(self, packet: CXLPacket) -> bool:
-        """Receive packet from upstream link into ingress queue."""
-        vc = packet.vc_id
+    def enqueue_ingress(self, flit: CXLFlit) -> bool:
+        """Receive flit from upstream link into ingress queue."""
+        vc = flit.vc_id
         if len(self.ingress_queues[vc]) >= self.max_queue_depth:
             # Under CBFC, this should NEVER happen unless credits are mismanaged
             self.packets_dropped += 1
             return False
             
-        self.ingress_queues[vc].append(packet)
+        self.ingress_queues[vc].append(flit)
         return True
 
-    def enqueue_egress(self, packet: CXLPacket):
-        """Move packet from crossbar into egress queue."""
-        self.egress_queues[packet.vc_id].append(packet)
+    def enqueue_egress(self, flit: CXLFlit):
+        """Move flit from crossbar into egress queue."""
+        self.egress_queues[flit.vc_id].append(flit)
 
-    def dequeue_egress(self, current_time: float) -> Optional[CXLPacket]:
+    def dequeue_egress(self, current_time: float) -> Optional[CXLFlit]:
         """
-        Remove and return head packet from highest priority egress queue
+        Remove and return head flit from highest priority egress queue
         THAT ALSO HAS TX CREDITS AVAILABLE.
         """
-        # Strict priority scheduling across VCs 7 -> 0
-        # Responses (4-7) generally take priority over Requests (0-3) to clear dependencies
         for vc in range(self.num_vcs - 1, -1, -1):
             if self.egress_queues[vc] and self.tx_credits[vc] > 0:
-                self.packets_processed += 1
-                packet = self.egress_queues[vc].popleft()
+                flit = self.egress_queues[vc].popleft()
                 self.tx_credits[vc] -= 1  # Consume a credit
-                self.total_queue_time += (current_time - packet.timestamp)
-                return packet
+                if flit.is_tail:
+                    self.packets_processed += 1
+                self.total_queue_time += (current_time - flit.packet.timestamp)
+                return flit
         return None
 
     @property
@@ -106,9 +105,9 @@ class CXLSwitch:
         if output_port not in self.routing_table[dst_target]:
             self.routing_table[dst_target].append(output_port)
 
-    def route_packet(self, packet: CXLPacket, arrival_port: int, sim_engine) -> bool:
+    def route_packet(self, packet: CXLPacket, flits: List[CXLFlit], arrival_port: int, sim_engine) -> bool:
         """
-        Route packet from Ingress queue to Egress queue (simulating Crossbar).
+        Route packet and its constituent flits from Ingress queue to Egress queue (simulating Crossbar).
         """
         self.total_packets_processed += 1
 
@@ -127,16 +126,14 @@ class CXLSwitch:
             
         out_port = self.ports[output_port_id]
 
-        # Was egress queue empty or lacking transmittable packets?
         could_transmit_before = out_port.has_transmittable_packets
 
-        # ECN marking (based on egress occupancy)
         if (out_port.egress_occupancy / (out_port.max_queue_depth * out_port.num_vcs)) > self.ecn_threshold:
             packet.ecn_marked = True
 
-        out_port.enqueue_egress(packet)
+        for flit in flits:
+            out_port.enqueue_egress(flit)
 
-        # If it wasn't transmittable before, but is now (due to credits), schedule tx
         if not could_transmit_before and out_port.has_transmittable_packets and not out_port.is_transmitting:
             self._schedule_port_transmission(output_port_id, sim_engine)
 
@@ -168,18 +165,21 @@ class CXLSwitch:
         )
         sim_engine.schedule_event(event)
 
-    def transmit_packet(self, output_port: int, sim_engine) -> Optional[CXLPacket]:
+    def transmit_packet(self, output_port: int, sim_engine) -> Optional[CXLFlit]:
         """
-        Transmit packet from egress queue (consumes tx_credit).
-        Then schedule next packet if transmittable.
+        Transmit flit from egress queue (consumes tx_credit).
+        Then schedule next flit if transmittable.
         """
         port = self.ports[output_port]
-        packet = port.dequeue_egress(sim_engine.current_time)
+        flit = port.dequeue_egress(sim_engine.current_time)
 
-        if packet:
-            packet.route.append(self.switch_id)
+        if flit:
+            if flit.is_tail and self.switch_id not in flit.packet.route:
+                flit.packet.route.append(self.switch_id)
 
-            serialization_ns = (packet.size * 8) / (port.bandwidth_gbps * 1e9) * 1e9
+            # Serialization delay for 1 flit (e.g. 68 bytes for CXL)
+            # We use 64 bytes for simplicity matching CXL_FLIT_SIZE
+            serialization_ns = (64 * 8) / (port.bandwidth_gbps * 1e9) * 1e9
             port.next_available_time = sim_engine.current_time + serialization_ns
 
             if port.has_transmittable_packets:
@@ -189,7 +189,7 @@ class CXLSwitch:
         else:
             port.is_transmitting = False
 
-        return packet
+        return flit
         
     def receive_credit(self, output_port: int, vc_id: int, sim_engine):
         """Receive credit return from downstream neighbor."""

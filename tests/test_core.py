@@ -110,7 +110,8 @@ class TestSwitch:
                 address=0x1000 * i
             )
             switch.routing_table[0] = [1]  # Route to port 1
-            switch.route_packet(packet, arrival_port=0, sim_engine=engine)
+            flits = packet.generate_flits()
+            switch.route_packet(packet, flits, arrival_port=0, sim_engine=engine)
         
         # With CBFC, packets are not dropped. They are queued in egress, 
         # but only 2 packets can be transmitted due to tx_credits=2.

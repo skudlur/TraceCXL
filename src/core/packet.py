@@ -29,6 +29,21 @@ class Priority(Enum):
 
 
 @dataclass
+class CXLFlit:
+    """
+    Flow Control Unit (Flit) - the smallest unit of transmission on the link.
+    """
+    packet: 'CXLPacket'
+    flit_id: int
+    is_head: bool
+    is_tail: bool
+
+    @property
+    def vc_id(self) -> int:
+        return self.packet.vc_id
+
+
+@dataclass
 class CXLPacket:
     """
     Represents a single CXL transaction packet.
@@ -65,6 +80,24 @@ class CXLPacket:
         """
         base = 4 if self.is_response else 0
         return base + self.priority.value
+
+    def generate_flits(self) -> list[CXLFlit]:
+        """Break this packet down into flits based on transaction type and size."""
+        # Header takes 1 flit. Payload takes ceil(size / CXL_FLIT_SIZE) flits.
+        if self.tx_type in [CXLTransactionType.MEM_WRITE, CXLTransactionType.MEM_READ_RESP]:
+            num_flits = 1 + (self.size + CXL_FLIT_SIZE - 1) // CXL_FLIT_SIZE
+        else:
+            num_flits = 1
+            
+        flits = []
+        for i in range(num_flits):
+            flits.append(CXLFlit(
+                packet=self,
+                flit_id=i,
+                is_head=(i == 0),
+                is_tail=(i == num_flits - 1)
+            ))
+        return flits
 
     @property
     def target(self):
@@ -103,6 +136,7 @@ class SimulationEvent:
     timestamp: float           # When this event should fire (ns)
     event_type: str           # Event type identifier
     packet: Optional[CXLPacket] = None
+    flit: Optional[CXLFlit] = None
     switch_id: Optional[int] = None
     metadata: dict = None
     

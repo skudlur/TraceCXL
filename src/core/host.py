@@ -8,7 +8,7 @@ to CXL-attached devices.
 from typing import List
 import random
 
-from .packet import CXLPacket, CXLTransactionType, SimulationEvent, Priority
+from .packet import CXLPacket, CXLTransactionType, SimulationEvent, Priority, CXLFlit
 from collections import deque
 from typing import Dict, Optional
 
@@ -69,7 +69,10 @@ class Host:
         
         self.next_packet_id += 1
         self.outstanding_requests[packet.packet_id] = packet
-        self.egress_queues[packet.vc_id].append(packet)
+        
+        flits = packet.generate_flits()
+        self.egress_queues[packet.vc_id].extend(flits)
+        
         return packet
         
     def has_transmittable_packets(self) -> bool:
@@ -79,14 +82,15 @@ class Host:
                 return True
         return False
         
-    def transmit_request(self) -> Optional[CXLPacket]:
-        """Dequeue a packet to send if credits are available."""
+    def transmit_request(self) -> Optional[CXLFlit]:
+        """Dequeue a flit to send if credits are available."""
         for vc in range(self.num_vcs - 1, -1, -1):
             if self.egress_queues[vc] and self.tx_credits[vc] > 0:
-                packet = self.egress_queues[vc].popleft()
+                flit = self.egress_queues[vc].popleft()
                 self.tx_credits[vc] -= 1
-                self.packets_sent += 1
-                return packet
+                if flit.is_tail:
+                    self.packets_sent += 1
+                return flit
         return None
         
     def receive_credit(self, vc_id: int):
