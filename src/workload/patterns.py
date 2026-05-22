@@ -76,6 +76,7 @@ class UniformRandomWorkload(WorkloadPattern):
                 timestamp = i * interval + random.uniform(0, interval * 0.1)
                 device_id = random.choice(devices)
                 address = random.randint(0, address_space - 1)
+                address = address - (address % 64)  # Align to 64 bytes
                 
                 requests.append(MemoryRequest(
                     timestamp=timestamp,
@@ -163,7 +164,8 @@ class ZipfianWorkload(WorkloadPattern):
         
         # Random offset within page
         page_size = address_space // num_pages
-        return hot_page * page_size + random.randint(0, page_size - 1)
+        addr = hot_page * page_size + random.randint(0, page_size - 1)
+        return addr - (addr % 64)  # Align to 64 bytes
 
 
 class HotspotWorkload(WorkloadPattern):
@@ -203,6 +205,7 @@ class HotspotWorkload(WorkloadPattern):
                     device_id = random.choice(other_devices) if other_devices else self.hotspot_device
                 
                 address = random.randint(0, address_space - 1)
+                address = address - (address % 64)  # Align to 64 bytes
                 
                 requests.append(MemoryRequest(
                     timestamp=timestamp,
@@ -252,6 +255,7 @@ class BurstyWorkload(WorkloadPattern):
                     timestamp = burst_start + i * 10  # 10ns apart within burst
                     device_id = random.choice(devices)
                     address = random.randint(0, address_space - 1)
+                    address = address - (address % 64)  # Align to 64 bytes
                     
                     requests.append(MemoryRequest(
                         timestamp=timestamp,

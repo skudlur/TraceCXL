@@ -16,3 +16,5 @@ env/
 .vscode/
 .idea/
 .DS_Store
+
+cxl_fabric_sim.egg-info/

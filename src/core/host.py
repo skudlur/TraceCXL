@@ -42,6 +42,7 @@ class Host:
         dst_device: int,
         address: int,
         is_read: bool = True,
+        size: int = 64,
         priority: Priority = Priority.MEDIUM,
         timestamp: float = 0.0
     ) -> CXLPacket:
@@ -52,6 +53,7 @@ class Host:
             dst_device: Target CXL memory device ID
             address: Memory address to access
             is_read: True for read, False for write
+            size: Transfer size in bytes
             priority: QoS priority
             timestamp: Creation timestamp
         """
@@ -63,6 +65,7 @@ class Host:
             src_host=self.host_id,
             dst_device=dst_device,
             address=address,
+            size=size,
             priority=priority,
             timestamp=timestamp
         )

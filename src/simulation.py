@@ -8,6 +8,7 @@ from src.core import (
 )
 from src.topology.builder import FabricTopology
 from src.workload.patterns import WorkloadPattern, MemoryRequest
+from src.analysis.validator import ProtocolValidator
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class FabricSimulation:
         self.topology = topology
         self.metrics_collector = metrics_collector
         self.engine = SimulationEngine(metrics_collector=metrics_collector)
+        self.validator = ProtocolValidator(self.engine)
         
         # Register handlers
         self.engine.register_handler("host_generate", self.handle_host_generate)
