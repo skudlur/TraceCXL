@@ -175,7 +175,7 @@ class TwoTierTopology(FabricTopology):
             self.switches.append(leaf)
             
             # First half of leaves get hosts, second half get devices
-            if i < self.num_leaves // 2 + 1:
+            if i < max(1, self.num_leaves // 2):
                 self.host_leaves.append(leaf_id)
             else:
                 self.device_leaves.append(leaf_id)

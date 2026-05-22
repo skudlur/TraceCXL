@@ -13,6 +13,7 @@ from .patterns import (
     TraceReplayWorkload,
     create_workload,
 )
+from .trace_export import export_trace
 
 __all__ = [
     'WorkloadPattern',
@@ -24,4 +25,5 @@ __all__ = [
     'SequentialWorkload',
     'TraceReplayWorkload',
     'create_workload',
+    'export_trace',
 ]

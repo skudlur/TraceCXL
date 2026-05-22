@@ -26,8 +26,9 @@ class MemoryRequest:
 class WorkloadPattern:
     """Base class for workload patterns"""
     
-    def __init__(self, seed: int = None):
+    def __init__(self, seed: int = None, read_ratio: float = 0.7):
         self.seed = seed
+        self.read_ratio = read_ratio
         if seed is not None:
             random.seed(seed)
     
@@ -78,11 +79,14 @@ class UniformRandomWorkload(WorkloadPattern):
                 address = random.randint(0, address_space - 1)
                 address = address - (address % 64)  # Align to 64 bytes
                 
+                is_read = random.random() < self.read_ratio
+                
                 requests.append(MemoryRequest(
                     timestamp=timestamp,
                     host_id=host_id,
                     device_id=device_id,
-                    address=address
+                    address=address,
+                    is_read=is_read
                 ))
         
         return requests
@@ -100,8 +104,8 @@ class ZipfianWorkload(WorkloadPattern):
         hot_device_fraction: Fraction of devices that are "hot" (default 0.2)
     """
     
-    def __init__(self, alpha: float = 1.0, hot_device_fraction: float = 0.2, seed=None):
-        super().__init__(seed)
+    def __init__(self, alpha: float = 1.0, hot_device_fraction: float = 0.2, seed=None, read_ratio=0.7):
+        super().__init__(seed, read_ratio)
         self.alpha = alpha
         self.hot_device_fraction = hot_device_fraction
     
@@ -130,11 +134,14 @@ class ZipfianWorkload(WorkloadPattern):
                 # Addresses within device also follow Zipfian pattern
                 address = self._zipf_address(1 << 30)
                 
+                is_read = random.random() < self.read_ratio
+                
                 requests.append(MemoryRequest(
                     timestamp=timestamp,
                     host_id=host_id,
                     device_id=device_id,
-                    address=address
+                    address=address,
+                    is_read=is_read
                 ))
         
         return requests
@@ -180,8 +187,8 @@ class HotspotWorkload(WorkloadPattern):
         hotspot_fraction: Fraction of traffic to hotspot (default 0.8)
     """
     
-    def __init__(self, hotspot_device: int = 0, hotspot_fraction: float = 0.8, seed=None):
-        super().__init__(seed)
+    def __init__(self, hotspot_device: int = 0, hotspot_fraction: float = 0.8, seed=None, read_ratio=0.7):
+        super().__init__(seed, read_ratio)
         self.hotspot_device = hotspot_device
         self.hotspot_fraction = hotspot_fraction
     
@@ -207,11 +214,14 @@ class HotspotWorkload(WorkloadPattern):
                 address = random.randint(0, address_space - 1)
                 address = address - (address % 64)  # Align to 64 bytes
                 
+                is_read = random.random() < self.read_ratio
+                
                 requests.append(MemoryRequest(
                     timestamp=timestamp,
                     host_id=host_id,
                     device_id=device_id,
-                    address=address
+                    address=address,
+                    is_read=is_read
                 ))
         
         return requests
@@ -229,8 +239,8 @@ class BurstyWorkload(WorkloadPattern):
         burst_interval_ns: Time between burst starts
     """
     
-    def __init__(self, burst_size: int = 10, burst_interval_ns: float = 1000.0, seed=None):
-        super().__init__(seed)
+    def __init__(self, burst_size: int = 10, burst_interval_ns: float = 1000.0, seed=None, read_ratio=0.7):
+        super().__init__(seed, read_ratio)
         self.burst_size = burst_size
         self.burst_interval_ns = burst_interval_ns
     
@@ -257,11 +267,14 @@ class BurstyWorkload(WorkloadPattern):
                     address = random.randint(0, address_space - 1)
                     address = address - (address % 64)  # Align to 64 bytes
                     
+                    is_read = random.random() < self.read_ratio
+                    
                     requests.append(MemoryRequest(
                         timestamp=timestamp,
                         host_id=host_id,
                         device_id=device_id,
-                        address=address
+                        address=address,
+                        is_read=is_read
                     ))
         
         return requests
@@ -278,8 +291,8 @@ class SequentialWorkload(WorkloadPattern):
         stride: Bytes between accesses (default 64 = cache line)
     """
     
-    def __init__(self, stride: int = 64, seed=None):
-        super().__init__(seed)
+    def __init__(self, stride: int = 64, seed=None, read_ratio=0.7):
+        super().__init__(seed, read_ratio)
         self.stride = stride
     
     def generate_requests(
@@ -298,11 +311,14 @@ class SequentialWorkload(WorkloadPattern):
                 timestamp = i * interval
                 address = base_address + (i * self.stride)
                 
+                is_read = random.random() < self.read_ratio
+                
                 requests.append(MemoryRequest(
                     timestamp=timestamp,
                     host_id=host_id,
                     device_id=device_id,
-                    address=address
+                    address=address,
+                    is_read=is_read
                 ))
         
         return requests
