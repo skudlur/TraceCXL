@@ -7,12 +7,10 @@ Implements common CXL fabric topologies:
 - Custom topologies
 """
 
-from typing import List, Dict, Tuple
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from typing import List, Dict, Tuple, Optional
 
-from core import CXLSwitch, Host
+from src.core import CXLSwitch, Host
+from src.routing.strategy import RoutingStrategy
 
 
 class FabricTopology:
@@ -32,9 +30,18 @@ class FabricTopology:
         """Override in subclasses to construct topology"""
         raise NotImplementedError
     
-    def configure_routing(self):
+    def configure_routing(self, routing_strategy: Optional[RoutingStrategy] = None):
         """Configure routing tables for all switches"""
         raise NotImplementedError
+        
+    def get_next_hop(self, switch_id: int, output_port: int) -> Optional[Tuple[int, int]]:
+        """Return (next_switch_id, arrival_port) or None if it reaches an endpoint."""
+        for link in self.switch_links:
+            if link[0] == switch_id and link[1] == output_port:
+                return (link[2], link[3])
+            if link[2] == switch_id and link[3] == output_port:
+                return (link[0], link[1])
+        return None
     
     def print_topology(self):
         """Print topology summary"""
@@ -89,14 +96,20 @@ class SingleTierTopology(FabricTopology):
         
         return self
     
-    def configure_routing(self):
+    def configure_routing(self, routing_strategy: Optional[RoutingStrategy] = None):
         """Configure routing table for single switch"""
         switch = self.switches[0]
+        if routing_strategy:
+            switch.routing_strategy = routing_strategy
         
         # Route each device to its port
         for i, dev_id in enumerate(self.cxl_devices):
             output_port = self.num_hosts + i
-            switch.set_route(dst_device=dev_id, output_port=output_port)
+            switch.set_route(dst_target=dev_id, output_port=output_port)
+            
+        # Route each host to its port (for response packets)
+        for i, host in enumerate(self.hosts):
+            switch.set_route(dst_target=f"host_{host.host_id}", output_port=i)
 
 
 class TwoTierTopology(FabricTopology):
@@ -195,11 +208,16 @@ class TwoTierTopology(FabricTopology):
         
         return self
     
-    def configure_routing(self):
+    def configure_routing(self, routing_strategy: Optional[RoutingStrategy] = None):
         """
         Configure routing tables for two-tier topology.
-        Uses simple shortest-path routing through spines.
+        Configure both forward paths (to devices) and reverse paths (to hosts).
         """
+        # Apply routing strategy to all switches if provided
+        if routing_strategy:
+            for switch in self.switches:
+                switch.routing_strategy = routing_strategy
+
         # For each device, configure paths from all switches
         for dev_id in self.cxl_devices:
             device_leaf = self.device_to_switch[dev_id]
@@ -211,23 +229,52 @@ class TwoTierTopology(FabricTopology):
             
             # Configure device leaf to route locally
             leaf_switch = self.switches[device_leaf]
-            leaf_switch.set_route(dst_device=dev_id, output_port=device_port)
+            leaf_switch.set_route(dst_target=dev_id, output_port=device_port)
             
             # Configure spine switches to route to device leaf
             for spine_idx in range(self.num_spines):
                 spine = self.switches[spine_idx]
-                # Find port that connects to device leaf
                 for link in self.switch_links:
                     if link[0] == spine_idx and link[2] == device_leaf:
                         spine_port = link[1]
-                        spine.set_route(dst_device=dev_id, output_port=spine_port)
+                        spine.set_route(dst_target=dev_id, output_port=spine_port)
                         break
             
-            # Configure host leaves to route through spine 0 (simple policy)
+            # Configure host leaves to route through all spines (for ECMP)
             for leaf_id in self.host_leaves:
                 leaf = self.switches[leaf_id]
-                # Route to spine 0
-                leaf.set_route(dst_device=dev_id, output_port=0)
+                for spine_idx in range(self.num_spines):
+                    leaf.set_route(dst_target=dev_id, output_port=spine_idx)
+                    
+        # For each host, configure reverse paths for response packets
+        for host in self.hosts:
+            host_id = host.host_id
+            host_target = f"host_{host_id}"
+            host_leaf = self.host_to_switch[host_id]
+            
+            # Find which port the host is on
+            hosts_on_leaf = [h.host_id for h in self.hosts if self.host_to_switch[h.host_id] == host_leaf]
+            host_index = hosts_on_leaf.index(host_id)
+            host_port = self.num_spines + host_index
+            
+            # Configure host leaf to route locally
+            leaf_switch = self.switches[host_leaf]
+            leaf_switch.set_route(dst_target=host_target, output_port=host_port)
+            
+            # Configure spine switches to route to host leaf
+            for spine_idx in range(self.num_spines):
+                spine = self.switches[spine_idx]
+                for link in self.switch_links:
+                    if link[0] == spine_idx and link[2] == host_leaf:
+                        spine_port = link[1]
+                        spine.set_route(dst_target=host_target, output_port=spine_port)
+                        break
+            
+            # Configure device leaves to route through all spines
+            for leaf_id in self.device_leaves:
+                leaf = self.switches[leaf_id]
+                for spine_idx in range(self.num_spines):
+                    leaf.set_route(dst_target=host_target, output_port=spine_idx)
 
 
 def create_topology(topology_type: str, **kwargs) -> FabricTopology:
@@ -241,6 +288,8 @@ def create_topology(topology_type: str, **kwargs) -> FabricTopology:
     Returns:
         Configured FabricTopology instance
     """
+    routing_strategy = kwargs.pop("routing_strategy", None)
+    
     if topology_type == "single":
         topo = SingleTierTopology(**kwargs)
     elif topology_type == "two_tier":
@@ -249,5 +298,9 @@ def create_topology(topology_type: str, **kwargs) -> FabricTopology:
         raise ValueError(f"Unknown topology type: {topology_type}")
     
     topo.build()
-    topo.configure_routing()
+    
+    if routing_strategy:
+        topo.configure_routing(routing_strategy)
+    else:
+        topo.configure_routing()
     return topo

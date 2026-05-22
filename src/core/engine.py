@@ -6,10 +6,13 @@ network events in timestamp order.
 """
 
 import heapq
+import logging
 from typing import Callable, Dict, List
 from collections import defaultdict
 
 from .packet import SimulationEvent, CXLPacket
+
+logger = logging.getLogger(__name__)
 
 
 class SimulationEngine:
@@ -19,16 +22,21 @@ class SimulationEngine:
     Manages the event queue and dispatches events to registered handlers.
     """
     
-    def __init__(self):
+    def __init__(self, metrics_collector=None):
         self.current_time = 0.0  # Current simulation time (ns)
         self.event_queue = []     # Min-heap of events
         self.event_handlers: Dict[str, List[Callable]] = defaultdict(list)
         self.stats = SimulationStats()
+        self.metrics_collector = metrics_collector
         
     def schedule_event(self, event: SimulationEvent):
         """Add event to the queue"""
         if event.timestamp < self.current_time:
             raise ValueError(f"Cannot schedule event in the past: {event.timestamp} < {self.current_time}")
+            
+        if event.event_type == "host_send":
+            self.stats.packets_sent += 1
+            
         heapq.heappush(self.event_queue, event)
     
     def register_handler(self, event_type: str, handler: Callable):
@@ -67,7 +75,9 @@ class SimulationEngine:
             events_processed += 1
             
             if events_processed % 10000 == 0:
-                print(f"Processed {events_processed} events, sim_time={self.current_time:.2f}ns")
+                logger.debug(f"Processed {events_processed} events, sim_time={self.current_time:.2f}ns")
+                if self.metrics_collector:
+                    self.metrics_collector.collect_switch_snapshot(self.current_time)
         
         self.stats.total_events = events_processed
         self.stats.final_time = self.current_time
@@ -84,6 +94,7 @@ class SimulationStats:
         self.packets_received = 0
         self.total_latency = 0.0
         self.latencies = []  # Per-packet latencies
+        self._sorted_latencies = None # Cached sorted latencies
         self.queue_depths = defaultdict(list)  # switch_id -> [depths over time]
         
     def record_packet_completion(self, packet: CXLPacket, completion_time: float):
@@ -92,6 +103,7 @@ class SimulationStats:
         self.packets_received += 1
         self.total_latency += latency
         self.latencies.append(latency)
+        self._sorted_latencies = None # Invalidate cache
     
     def avg_latency(self) -> float:
         """Average end-to-end latency"""
@@ -103,9 +115,10 @@ class SimulationStats:
         """Calculate p-th percentile latency (p in [0, 100])"""
         if not self.latencies:
             return 0.0
-        sorted_latencies = sorted(self.latencies)
-        idx = int(len(sorted_latencies) * p / 100.0)
-        return sorted_latencies[min(idx, len(sorted_latencies) - 1)]
+        if self._sorted_latencies is None:
+            self._sorted_latencies = sorted(self.latencies)
+        idx = int(len(self._sorted_latencies) * p / 100.0)
+        return self._sorted_latencies[min(idx, len(self._sorted_latencies) - 1)]
     
     def print_summary(self):
         """Print simulation summary"""

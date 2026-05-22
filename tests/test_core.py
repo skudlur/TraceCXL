@@ -1,11 +1,7 @@
 """Unit tests for core simulation components."""
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
 import pytest
-from core import (
+from src.core import (
     CXLPacket, CXLTransactionType, SimulationEvent,
     SimulationEngine, CXLSwitch, Host, Priority
 )
@@ -96,9 +92,9 @@ class TestSwitch:
     
     def test_routing_table(self):
         switch = CXLSwitch(switch_id=0, num_ports=4)
-        switch.set_route(dst_device=0, output_port=2)
+        switch.set_route(dst_target=0, output_port=2)
         
-        assert switch.routing_table[0] == 2
+        assert switch.routing_table[0] == [2]
     
     def test_queue_overflow(self):
         switch = CXLSwitch(switch_id=0, num_ports=2, queue_depth=2)
@@ -113,7 +109,7 @@ class TestSwitch:
                 dst_device=0,
                 address=0x1000 * i
             )
-            switch.routing_table[0] = 1  # Route to port 1
+            switch.routing_table[0] = [1]  # Route to port 1
             switch.route_packet(packet, arrival_port=0, sim_engine=engine)
         
         # Third packet should be dropped

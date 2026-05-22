@@ -2,11 +2,11 @@
 CXL Switch model with proper queue-driven transmission.
 """
 
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
-from .packet import CXLPacket, SimulationEvent, CXL_SWITCH_LATENCY
+from .packet import CXLPacket, SimulationEvent, CXL_SWITCH_LATENCY, Priority
 
 
 @dataclass
@@ -17,57 +17,71 @@ class SwitchPort:
     bandwidth_gbps: float = 64.0
 
     def __post_init__(self):
-        self.queue = deque()
-        self.packets_sent = 0
-        self.packets_dropped = 0
+        self.queues = {
+            Priority.CRITICAL: deque(),
+            Priority.HIGH: deque(),
+            Priority.MEDIUM: deque(),
+            Priority.LOW: deque()
+        }
+        self.packets_processed = 0
+        self.packets_dropped_by_priority = {p: 0 for p in Priority}
         self.total_queue_time = 0.0
         self.is_transmitting = False  # Is port currently busy?
         self.next_available_time = 0.0
 
     def enqueue(self, packet: CXLPacket) -> bool:
-        """Enqueue packet. Returns True if successful."""
-        if len(self.queue) >= self.max_queue_depth:
-            self.packets_dropped += 1
+        """Enqueue packet based on priority. Returns True if successful."""
+        if self.is_full:
+            self.packets_dropped_by_priority[packet.priority] += 1
             return False
 
-        self.queue.append(packet)
+        self.queues[packet.priority].append(packet)
         return True
 
-    def dequeue(self) -> Optional[CXLPacket]:
-        """Remove and return head packet"""
-        if self.queue:
-            self.packets_sent += 1
-            return self.queue.popleft()
+    def dequeue(self, current_time: float) -> Optional[CXLPacket]:
+        """Remove and return head packet from highest priority queue."""
+        for priority in [Priority.CRITICAL, Priority.HIGH, Priority.MEDIUM, Priority.LOW]:
+            if self.queues[priority]:
+                self.packets_processed += 1
+                packet = self.queues[priority].popleft()
+                self.total_queue_time += (current_time - packet.timestamp)
+                return packet
         return None
 
     @property
-    def is_full(self) -> bool:
-        return len(self.queue) >= self.max_queue_depth
+    def occupancy(self) -> int:
+        """Current number of packets across all priority queues."""
+        return sum(len(q) for q in self.queues.values())
 
     @property
-    def occupancy(self) -> float:
-        return len(self.queue) / self.max_queue_depth
+    def is_full(self) -> bool:
+        """Check if total occupancy reached limit."""
+        return self.occupancy >= self.max_queue_depth
 
     @property
     def has_packets(self) -> bool:
-        return len(self.queue) > 0
+        """Check if any packets are queued."""
+        return self.occupancy > 0
 
 
 class CXLSwitch:
     """Models a CXL fabric switch with proper queueing."""
 
-    def __init__(self, switch_id: int, num_ports: int, queue_depth: int = 32):
+    def __init__(self, switch_id: int, num_ports: int, queue_depth: int = 32, ecn_threshold: float = 0.6, routing_strategy=None):
         self.switch_id = switch_id
         self.num_ports = num_ports
         self.ports = [SwitchPort(i, queue_depth) for i in range(num_ports)]
-        self.routing_table = {}
+        self.routing_table: Dict[Any, List[int]] = defaultdict(list)
         self.total_packets_processed = 0
         self.total_packets_dropped = 0
+        self.ecn_threshold = ecn_threshold
+        self.routing_strategy = routing_strategy
 
-    def set_route(self, dst_device: int, output_port: int):
+    def set_route(self, dst_target: Any, output_port: int):
         if output_port >= self.num_ports:
             raise ValueError(f"Invalid port {output_port}")
-        self.routing_table[dst_device] = output_port
+        if output_port not in self.routing_table[dst_target]:
+            self.routing_table[dst_target].append(output_port)
 
     def route_packet(self, packet: CXLPacket, arrival_port: int, sim_engine) -> bool:
         """
@@ -76,11 +90,22 @@ class CXLSwitch:
         """
         self.total_packets_processed += 1
 
-        if packet.dst_device not in self.routing_table:
+        # Determine logical destination (device or host)
+        # For forward path, dst_device is an int. For response, we'll use a string or tuple
+        # But wait, let's just use a property `target` which we can set on the packet
+        target = getattr(packet, 'target', packet.dst_device)
+        
+        if target not in self.routing_table or not self.routing_table[target]:
             self.total_packets_dropped += 1
             return False
 
-        output_port_id = self.routing_table[packet.dst_device]
+        available_ports = self.routing_table[target]
+        
+        if self.routing_strategy:
+            output_port_id = self.routing_strategy.get_output_port(self, packet, available_ports)
+        else:
+            output_port_id = available_ports[0] # Static default
+            
         port = self.ports[output_port_id]
 
         # Check if queue was empty before enqueue
@@ -90,6 +115,10 @@ class CXLSwitch:
         if not port.enqueue(packet):
             self.total_packets_dropped += 1
             return False
+
+        # ECN marking
+        if (port.occupancy / port.max_queue_depth) > self.ecn_threshold:
+            packet.ecn_marked = True
 
         # Only schedule transmission if this is the first packet in queue
         if was_empty and not port.is_transmitting:
@@ -132,7 +161,7 @@ class CXLSwitch:
         Then schedule next packet if queue not empty.
         """
         port = self.ports[output_port]
-        packet = port.dequeue()
+        packet = port.dequeue(sim_engine.current_time)
 
         if packet:
             packet.route.append(self.switch_id)
@@ -159,13 +188,15 @@ class CXLSwitch:
             "total_processed": self.total_packets_processed,
             "total_dropped": self.total_packets_dropped,
             "drop_rate": self.total_packets_dropped / max(1, self.total_packets_processed),
-            "port_occupancies": [p.occupancy for p in self.ports],
-            "avg_occupancy": sum(p.occupancy for p in self.ports) / len(self.ports),
+            "port_occupancies": [p.occupancy / p.max_queue_depth for p in self.ports],
+            "avg_occupancy": sum(p.occupancy / p.max_queue_depth for p in self.ports) / len(self.ports),
         }
 
     def print_status(self):
         print(f"\nSwitch {self.switch_id}:")
         print(f"  Processed: {self.total_packets_processed}, Dropped: {self.total_packets_dropped}")
-        for i, port in enumerate(self.ports):
-            print(f"  Port {i}: queue={len(port.queue)}/{port.max_queue_depth}, "
-                  f"sent={port.packets_sent}, dropped={port.packets_dropped}")
+        for port in self.ports:
+            drops_str = ", ".join(f"{p.name}: {v}" for p, v in port.packets_dropped_by_priority.items() if v > 0)
+            drops_msg = f" (Drops: {drops_str})" if drops_str else ""
+            print(f"  Port {port.port_id}: {port.occupancy}/{port.max_queue_depth} queued, "
+                  f"{port.packets_processed} processed{drops_msg}")

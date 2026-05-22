@@ -11,9 +11,6 @@ Implements common memory access patterns:
 import random
 from typing import List, Tuple
 from dataclasses import dataclass
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 @dataclass
 class MemoryRequest:

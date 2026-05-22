@@ -7,7 +7,7 @@ This module defines the fundamental building blocks:
 - Transaction types
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
@@ -52,15 +52,35 @@ class CXLPacket:
     size: int = 64  # Default CXL cache line size
     priority: Priority = Priority.MEDIUM
     timestamp: float = 0.0
-    route: list[int] = None
+    route: list[int] = field(default_factory=list)
+    ecn_marked: bool = False
+    is_response: bool = False
     
-    def __post_init__(self):
-        if self.route is None:
-            self.route = []
-    
+    @property
+    def target(self):
+        """Logical routing target for this packet"""
+        if self.is_response:
+            return f"host_{self.src_host}"
+        return self.dst_device
+
     def latency_at(self, current_time: float) -> float:
         """Calculate end-to-end latency"""
         return current_time - self.timestamp
+
+    def create_response(self, current_time: float, response_id: int) -> 'CXLPacket':
+        """Create a response packet for this request."""
+        tx_type = CXLTransactionType.MEM_READ_RESP if self.tx_type == CXLTransactionType.MEM_READ else CXLTransactionType.MEM_WRITE_ACK
+        return CXLPacket(
+            packet_id=response_id,
+            tx_type=tx_type,
+            src_host=self.src_host,
+            dst_device=self.dst_device,
+            address=self.address,
+            size=64 if tx_type == CXLTransactionType.MEM_READ_RESP else 0,
+            timestamp=current_time,
+            priority=self.priority,
+            is_response=True
+        )
 
 
 @dataclass
